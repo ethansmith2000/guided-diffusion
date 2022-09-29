@@ -10,6 +10,7 @@ import math
 
 import numpy as np
 import torch as th
+import torchvision.transforms.functional as TF
 
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
@@ -624,7 +625,7 @@ class GaussianDiffusion:
             # Lazy import so that we don't depend on tqdm.
             from tqdm.auto import tqdm
 
-            indices = tqdm(indices)
+            indices = tqdm(indices, desc="Steps")
 
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
@@ -656,12 +657,26 @@ class GaussianDiffusion:
         cond_fn=None,
         model_kwargs=None,
         eta=0.0,
+        inpainting_mode=False,
+        orig_img=None,
+        mask_inpaint=None,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
 
         Same usage as p_sample().
         """
+        alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+        if inpainting_mode:
+            noised_orig_img = th.sqrt(alpha_bar) * orig_img + \
+                              th.sqrt(1 - alpha_bar) * th.randn_like(x)
+            # noised_orig_img_pil = TF.to_pil_image(noised_orig_img[0].add(1).div(2).clamp(0, 1))
+            # noised_orig_img_pil.save(f'/content/drive/MyDrive/AI/Disco_Diffusion/images_out/InpaintingTest/inpainting_dump/noised_orig_{t[0].item()}.png')
+            x = (1-mask_inpaint) * noised_orig_img + mask_inpaint * x
+            # mixed_x = TF.to_pil_image(x[0].add(1).div(2).clamp(0, 1))
+            # mixed_x.save(f'/content/drive/MyDrive/AI/Disco_Diffusion/images_out/InpaintingTest/inpainting_dump/mixed_x_{t[0].item()}.png')
+
+        
         out_orig = self.p_mean_variance(
             model,
             x,
@@ -679,7 +694,7 @@ class GaussianDiffusion:
         # in case we used x_start or x_prev prediction.
         eps = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
 
-        alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+
         alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
         sigma = (
             eta
@@ -851,6 +866,12 @@ class GaussianDiffusion:
         init_image=None,
         randomize_class=False,
         cond_fn_with_grad=False,
+        transformation_fn=None,
+        transformation_percent=[],
+        inpainting_mode=False,
+        mask_inpaint=None,
+        skip_timesteps_orig=None
+        
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -870,6 +891,7 @@ class GaussianDiffusion:
             init_image = th.zeros_like(img)
 
         indices = list(range(self.num_timesteps - skip_timesteps))[::-1]
+        transformation_steps = [int(len(indices)*(1-i)) for i in transformation_percent]
 
 
         if init_image is not None:
@@ -879,8 +901,10 @@ class GaussianDiffusion:
         if progress:
             # Lazy import so that we don't depend on tqdm.
             from tqdm.auto import tqdm
+            indices = tqdm(indices, desc="Steps")
 
-            indices = tqdm(indices)
+        if inpainting_mode and skip_timesteps_orig is None:
+            skip_timesteps_orig = self.num_timesteps
 
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
@@ -889,18 +913,36 @@ class GaussianDiffusion:
                                                size=model_kwargs['y'].shape,
                                                device=model_kwargs['y'].device)
             with th.no_grad():
-
+                if i in transformation_steps and transformation_fn is not None:
+                  img = transformation_fn(img)
                 sample_fn = self.ddim_sample_with_grad if cond_fn_with_grad else self.ddim_sample
-                out = sample_fn(
-                    model,
-                    img,
-                    t,
-                    clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn,
-                    cond_fn=cond_fn,
-                    model_kwargs=model_kwargs,
-                    eta=eta,
-                )
+                if inpainting_mode \
+                        and i >= self.num_timesteps - skip_timesteps_orig \
+                        and not cond_fn_with_grad:
+                    out = sample_fn(
+                        model,
+                        img,
+                        t,
+                        clip_denoised=clip_denoised,
+                        denoised_fn=denoised_fn,
+                        cond_fn=cond_fn,
+                        model_kwargs=model_kwargs,
+                        eta=eta,
+                        inpainting_mode=inpainting_mode,
+                        orig_img=init_image,
+                        mask_inpaint=mask_inpaint,
+                    )
+                else:
+                    out = sample_fn(
+                        model,
+                        img,
+                        t,
+                        clip_denoised=clip_denoised,
+                        denoised_fn=denoised_fn,
+                        cond_fn=cond_fn,
+                        model_kwargs=model_kwargs,
+                        eta=eta,
+                    )
                 yield out
                 img = out["sample"]
 
@@ -1078,7 +1120,7 @@ class GaussianDiffusion:
             # Lazy import so that we don't depend on tqdm.
             from tqdm.auto import tqdm
 
-            indices = tqdm(indices)
+            indices = tqdm(indices, desc="Steps")
 
         old_out = None
 
