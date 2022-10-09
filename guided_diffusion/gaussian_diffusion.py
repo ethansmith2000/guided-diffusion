@@ -295,11 +295,11 @@ class GaussianDiffusion:
             if denoised_fn is not None:
                 x = denoised_fn(x)
             if clip_denoised:
-                checker = x[x>1]
-                if th.any(checker):
-                    maxval = th.max(x)
-                    return x/(maxval * th.tanh((x**3)/2))
-                #return x.clamp(-1, 1)
+#                 checker = x[x>1]
+#                 if th.any(checker):
+#                     maxval = th.max(x)
+#                     return x/(maxval * th.tanh((x**3)/2))
+                return x.clamp(-1, 1)
             return x
 
         if self.model_mean_type == ModelMeanType.PREVIOUS_X:
