@@ -297,8 +297,8 @@ class GaussianDiffusion:
             if clip_denoised:
                 checker = x[x>1]
                 if th.any(checker):
-                    maxval = torch.max(x)
-                    return x/(maxval * torch.tanh((x**3)/2))
+                    maxval = th.max(x)
+                    return x/(maxval * th.tanh((x**3)/2))
                 #return x.clamp(-1, 1)
             return x
 
